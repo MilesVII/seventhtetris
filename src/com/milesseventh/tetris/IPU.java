@@ -37,9 +37,10 @@ public class IPU implements InputProcessor {
 			host.toggleDragDown(true);
 			return true;
 		case Keys.BACK:
+		case Keys.MENU:
 		case Keys.ESCAPE:
 			host.pause(!host.isPaused());
-			return true;
+			return false;
 		}
 		return false;
 	}

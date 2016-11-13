@@ -1,7 +1,10 @@
 package com.milesseventh.tetris;
 
+import java.util.ArrayList;
+
 import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input.Keys;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
@@ -25,28 +28,32 @@ public class Tetris extends ApplicationAdapter {
     public static final int SCREEN_H = GLASS_H - 2;//In cells
     public static final int GUI_MULTIPLIER = 32;
     public static final float MOVE_DELAY = .35f, MOVE_STEP = .07f;//In secs
-    private static float SPEED = 2f, FLASH_SPEED = 0.05f;//Frequency
+    private static float SPEED = 2f; 
+    private static final float FLASH_SPEED = 0.05f;//Frequency
     private static final Color GRID_COL = Color.GREEN;
     private static final Color TM_INACTIVE_COL = GRID_COL;
     private static final Color TM_ACTIVE_COL = Color.WHITE;
+    private static final Color TM_GHOST_COL = Color.GRAY;
     private static final Color FLASH_COL = Color.GREEN.cpy();
     private static final Color TEXT_COL = Color.WHITE;
+    private static final Color SHOUT_COL = Color.WHITE.cpy();
     
     public boolean[][] glass = new boolean[GLASS_W][GLASS_H];
     public Tetramino fallingTetramino;
-    public int linesCleared = 0;
+    public int linesCleared = 0, selectedEntry = 0;
     private boolean isPermaDragging;
 	private Viewport viewport;
     private Camera camera, guiCamera;
     private ShapeRenderer sr; 
-    private BitmapFont font;
+    private BitmapFont font, shoutFont;
     private Batch batch;
     private float timer = 1 / SPEED, moveTimer = MOVE_DELAY, dragDownTimer = MOVE_STEP;
     private IPU inputProcessor = new IPU(this);
     private float[] flashes = new float[SCREEN_H];
     private boolean isPaused = true;
-    public boolean strangeModeIsOn = false;
+    public boolean strangeModeIsOn = true, traditionalModeIsOn = true, ghostPieceIsOn = false;
     private GlyphLayout glay = new GlyphLayout();
+    private ArrayList<Phrase> phrases= new ArrayList<Phrase>();
     
 	private MenuEntry.MEAction menu_ng = new MenuEntry.MEAction(){
 		@Override
@@ -68,13 +75,27 @@ public class Tetris extends ApplicationAdapter {
 			_me.setTitle("Strange mode is " + (strangeModeIsOn?"on":"off"));
 		}
 	};
+	private MenuEntry.MEAction menu_gp = new MenuEntry.MEAction(){
+		@Override
+		public void run(MenuEntry _me, boolean _inc){
+			ghostPieceIsOn = !ghostPieceIsOn;
+			_me.setTitle("Ghost piece is " + (ghostPieceIsOn?"on":"off"));
+		}
+	};
+	private MenuEntry.MEAction menu_tm = new MenuEntry.MEAction(){
+		@Override
+		public void run(MenuEntry _me, boolean _inc){
+			traditionalModeIsOn = !traditionalModeIsOn;
+			_me.setTitle("Growing speed is " + (traditionalModeIsOn?"on":"off"));
+		}
+	};
 	private MenuEntry.MEAction menu_spd = new MenuEntry.MEAction(){
 		@Override
 		public void run(MenuEntry _me, boolean _inc){
 			SPEED += _inc?.5f:-.5f;
 			if (SPEED < .5f)
 				SPEED = .5f;
-			_me.setTitle("< Speed: " + SPEED + " Ghz >");
+			_me.setTitle("< Speed: " + SPEED + " Hz >");
 		}
 	};
 	private MenuEntry.MEAction menu_ex = new MenuEntry.MEAction(){
@@ -87,19 +108,25 @@ public class Tetris extends ApplicationAdapter {
 			new MenuEntry("New game", menu_ng),
 			new MenuEntry("Continue", menu_con),
 			new MenuEntry("Strange mode is " + (strangeModeIsOn?"on":"off"), menu_stm),
-			new MenuEntry("< Speed: " + SPEED + " Ghz >", menu_spd),
+			new MenuEntry("Ghost piece is " + (ghostPieceIsOn?"on":"off"), menu_gp),
+			new MenuEntry("Growing speed is " + (traditionalModeIsOn?"on":"off"), menu_tm),
+			new MenuEntry("< Speed: " + SPEED + " Hz >", menu_spd),
 			new MenuEntry("Exit", menu_ex)
 		};
 	
 	@Override
 	public void create () {
 		Gdx.input.setInputProcessor(inputProcessor);
+		Gdx.input.setCatchBackKey(true);
+		Gdx.input.setCatchMenuKey(true);
 		
 		FreeTypeFontGenerator ftfg = new FreeTypeFontGenerator(Gdx.files.internal("fonts/Prototype.ttf"));
 		FreeTypeFontParameter parameter = new FreeTypeFontParameter();
 		parameter.size = 28;
-		parameter.characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz:0123456789.<>";
+		parameter.characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz:0123456789.<>!?";
 		font = ftfg.generateFont(parameter);
+		parameter.size = 50;
+		shoutFont = ftfg.generateFont(parameter);
 		font.setColor(TEXT_COL);
 		ftfg.dispose();
 		
@@ -154,16 +181,21 @@ public class Tetris extends ApplicationAdapter {
 		sr.end();
 		
 		sr.setColor(TM_ACTIVE_COL);
-		//Active tetramino
 		sr.begin(ShapeType.Filled);
+		//Ghost piece
+		if (ghostPieceIsOn)
+			for (int xx = 0; xx < fallingTetramino.getSideSize(); xx++)
+				for (int yy = 0; yy < fallingTetramino.getSideSize(); yy++)
+					if (fallingTetramino.arr[xx][yy])
+						sr.rect(fallingTetramino.getX() + xx, fallingTetramino.getGhostY() + yy, 1, 1,
+								TM_GHOST_COL, TM_GHOST_COL, TM_GHOST_COL, TM_GHOST_COL);
+
+		//Active tetramino
 		for (int xx = 0; xx < fallingTetramino.getSideSize(); xx++)
 			for (int yy = 0; yy < fallingTetramino.getSideSize(); yy++)
-				if (fallingTetramino.arr[xx][yy]){
-					try {
-						sr.rect(fallingTetramino.getX() + xx, fallingTetramino.getY() + yy, 1, 1);
-					} catch (IndexOutOfBoundsException _ex){}
-				}
-
+				if (fallingTetramino.arr[xx][yy])
+					sr.rect(fallingTetramino.getX() + xx, fallingTetramino.getY() + yy, 1, 1);
+		
 		//Next tetramino
 		short _size = Tetramino.getSideSize(Tetramino.getNextTetramino());
 		boolean[][] _t = Tetramino.getNextTetraminoAsArray();
@@ -194,27 +226,51 @@ public class Tetris extends ApplicationAdapter {
 		
 		//Text
 		batch.begin();
-		font.draw(batch, "  Lines:" + linesCleared, 3.2f * GUI_MULTIPLIER, 0);
+		font.draw(batch, "  Lines:" + linesCleared + (traditionalModeIsOn?("\n  Speed:" + SPEED + "Hz"):""), 3.2f * GUI_MULTIPLIER, 0);
+		if (phrases.size() > 0){
+			SHOUT_COL.a = phrases.get(0).getTransparency() / (float)Phrase.MAX_TRANSPARENCY;
+			shoutFont.setColor(SHOUT_COL);
+			glay.setText(shoutFont, phrases.get(0).getText());
+			shoutFont.draw(batch, phrases.get(0).getText(), GUI_MULTIPLIER * (-SCREEN_W / 2 + GLASS_W / 2) - glay.width / 2f, GUI_MULTIPLIER * SCREEN_H * .25f);
+			if (phrases.get(0).tryHide())
+				phrases.remove(0);
+		}
 		batch.end();
 	}
 
 	public void render_menu() {
 		int _displayH = Gdx.graphics.getHeight();
 		float _partHeight = 1 / (float)MENU.length;
-		batch.begin();
+
+		if (Gdx.input.isKeyJustPressed(Keys.UP)){
+			selectedEntry--;
+			if (selectedEntry < 0)
+				selectedEntry = MENU.length - 1;
+		} else if (Gdx.input.isKeyJustPressed(Keys.DOWN)){
+			selectedEntry++;
+			if (selectedEntry == MENU.length)
+				selectedEntry = 0;
+		}
 		
+		if (Gdx.input.isKeyJustPressed(Keys.ENTER))
+			MENU[selectedEntry].call(true);
+		
+		batch.begin();
 		for (int tearsOfSorrow = 0; tearsOfSorrow < MENU.length; tearsOfSorrow++){
 			if (Gdx.input.justTouched()){
-				
 				if (Gdx.input.getY() / (float)_displayH < (tearsOfSorrow + 1) / (float)MENU.length &&
 					Gdx.input.getY() / (float)_displayH > tearsOfSorrow / (float)MENU.length){
 					MENU[tearsOfSorrow].call(Gdx.input.getX() / (float)Gdx.graphics.getWidth() > 0.5f);
 				}
 			}
+			if (Gdx.app.getType() == com.badlogic.gdx.Application.ApplicationType.Desktop)
+				if (tearsOfSorrow == selectedEntry)
+					font.setColor(Color.GREEN);
+				else
+					font.setColor(Color.WHITE);
 			font.draw(batch, MENU[tearsOfSorrow].getTitle(), -MENU[tearsOfSorrow].getPositionOffset(true), 
 					GUI_MULTIPLIER * SCREEN_H * (.5f - _partHeight * (tearsOfSorrow + .5f) + MENU[tearsOfSorrow].getPositionOffset(false) / (float)Gdx.graphics.getHeight()));
 		}
-		
 		batch.end();
 	}
 	
@@ -229,7 +285,7 @@ public class Tetris extends ApplicationAdapter {
 		//Gravity
 		timer -= _dt;
 		if (timer <= 0){
-			timer = 1 / SPEED;
+			resetGravityTimer();
 
     		if (!isPermaDragging)
     			fallingTetramino.dragDown();
@@ -279,6 +335,7 @@ public class Tetris extends ApplicationAdapter {
 	
 	public void dodgeToGlass(Tetramino __, boolean _eog){
 		short _size = __.getSideSize();
+		int preLinesCleared = linesCleared, deltaLinesCleared;
 		
 		for (int yy = 0; yy < _size; yy++){
 			for (int xx = 0; xx < _size; xx++)
@@ -295,6 +352,19 @@ public class Tetris extends ApplicationAdapter {
 		}
 		
 		dropLines();
+		deltaLinesCleared = linesCleared - preLinesCleared;
+		switch (deltaLinesCleared){
+		case(2):
+		case(3):
+			shout("" + deltaLinesCleared + "x Combo!");
+			break;
+		case(4):
+			shout("Tetris!");
+			break;
+		case(5):
+			shout("P... Pentis?!");
+			break;
+		}
 		toggleDragDown(false);
 		fallingTetramino = new Tetramino(this);
 	}
@@ -319,6 +389,8 @@ public class Tetris extends ApplicationAdapter {
 			glass[xx][_yy] = false;
 		linesCleared++;
 		flashes[_yy] = 1;
+		if (traditionalModeIsOn && linesCleared % 10 == 0)
+			SPEED += .5f;
 	}
 	
 	private void dropLines(){
@@ -340,6 +412,10 @@ public class Tetris extends ApplicationAdapter {
 		glass = _t;
 	}
 	
+	public void shout(String _text){
+		phrases.add(new Phrase(_text));
+	}
+	
 	public void reset(){
 		//Clean the glass
 		for (int xx = 0; xx < GLASS_W; xx++)
@@ -352,5 +428,11 @@ public class Tetris extends ApplicationAdapter {
 			flashes[_cum] = 0;
 		//Reset falling tetramino
         fallingTetramino = new Tetramino(this);
+        //Reset bag
+        Tetramino.bagReset();
+	}
+	
+	public void resetGravityTimer(){
+		timer = 1 / SPEED;
 	}
 }
